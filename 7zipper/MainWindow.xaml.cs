@@ -15,11 +15,9 @@ namespace Zipper7
 {
     public partial class MainWindow : Window
     {
-        // 設定ファイル名をアプリ名に基づいたものに変更
         private const string ConfigFile = "7zipper.json";
         private string _sevenZipPath = @"C:\Program Files\7-Zip\7z.exe";
 
-        // 設定パネル展開時のサイズ復元用
         private double _originalWidth = 150;
         private double _originalHeight = 150;
 
@@ -35,7 +33,6 @@ namespace Zipper7
             {
                 if (File.Exists(ConfigFile))
                 {
-                    // UTF-8 (BOM無し) で読み込み
                     string json = File.ReadAllText(ConfigFile, new UTF8Encoding(false));
                     var config = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
 
@@ -44,6 +41,13 @@ namespace Zipper7
                         if (config.TryGetValue("Ultra", out var u)) ChkUltra.IsChecked = bool.Parse(u);
                         if (config.TryGetValue("Thread", out var t)) ChkThread.IsChecked = bool.Parse(t);
                         if (config.TryGetValue("Timestamp", out var ts)) ChkTimestamp.IsChecked = bool.Parse(ts);
+
+                        // 最前面設定の読み込み（デフォルトON）
+                        bool isTopmost = true;
+                        if (config.TryGetValue("Topmost", out var tm)) isTopmost = bool.Parse(tm);
+                        ChkTopmost.IsChecked = isTopmost;
+                        this.Topmost = isTopmost;
+
                         if (config.TryGetValue("Ext", out var e))
                         {
                             foreach (ComboBoxItem item in ComboExt.Items)
@@ -56,20 +60,21 @@ namespace Zipper7
                             }
                         }
 
-                        // ウィンドウ位置の復元
                         if (config.TryGetValue("WindowTop", out var top) && double.TryParse(top, out double tVal)) this.Top = tVal;
                         if (config.TryGetValue("WindowLeft", out var left) && double.TryParse(left, out double lVal)) this.Left = lVal;
 
-                        // 画面外に配置されないための簡易チェック
                         if (this.Top < 0) this.Top = 0;
                         if (this.Left < 0) this.Left = 0;
                     }
                 }
                 else
                 {
+                    // デフォルト設定
                     ChkUltra.IsChecked = true;
                     ChkThread.IsChecked = true;
                     ChkTimestamp.IsChecked = true;
+                    ChkTopmost.IsChecked = true;
+                    this.Topmost = true;
                     ComboExt.SelectedIndex = 0;
                     SaveConfig();
                 }
@@ -89,19 +94,26 @@ namespace Zipper7
                     { "Ultra", ChkUltra.IsChecked?.ToString() ?? "True" },
                     { "Thread", ChkThread.IsChecked?.ToString() ?? "True" },
                     { "Timestamp", ChkTimestamp.IsChecked?.ToString() ?? "True" },
+                    { "Topmost", ChkTopmost.IsChecked?.ToString() ?? "True" },
                     { "Ext", ((ComboBoxItem)ComboExt.SelectedItem).Content?.ToString() ?? ".zip" },
-                    // 現在のウィンドウ位置を保存
                     { "WindowTop", this.Top.ToString() },
                     { "WindowLeft", this.Left.ToString() }
                 };
 
-                // UTF-8 (BOM無し) で書き出し
                 string json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(ConfigFile, json, new UTF8Encoding(false));
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"Save Config Error: {ex.Message}");
+            }
+        }
+
+        private void ChkTopmost_Changed(object sender, RoutedEventArgs e)
+        {
+            if (this.IsLoaded)
+            {
+                this.Topmost = ChkTopmost.IsChecked == true;
             }
         }
 
@@ -133,13 +145,13 @@ namespace Zipper7
             if (e.LeftButton == MouseButtonState.Pressed)
             {
                 DragMove();
-                SaveConfig(); // 移動後に位置を確定保存
+                SaveConfig();
             }
         }
 
         private void ExitMenu_Click(object sender, RoutedEventArgs e)
         {
-            SaveConfig(); // 終了時にも位置を保存
+            SaveConfig();
             Application.Current.Shutdown();
         }
 
@@ -179,7 +191,6 @@ namespace Zipper7
                 {
                     Point dropPoint = e.GetPosition(DropZone);
 
-                    // UIをブロックしないように非同期で実行
                     if (paths.Length > 1 && dropPoint.X < DropZone.ActualWidth / 2)
                     {
                         Task.Run(() => ExecuteParallel7Zip(paths));
@@ -192,10 +203,8 @@ namespace Zipper7
             }
         }
 
-        // 個別圧縮：同時実行数を制限する
         private void ExecuteParallel7Zip(string[] paths)
         {
-            // 同時実行数を3に制限（環境に合わせて調整してください）
             var options = new ParallelOptions { MaxDegreeOfParallelism = 3 };
 
             Parallel.ForEach(paths, options, path =>
@@ -208,14 +217,12 @@ namespace Zipper7
         {
             if (!File.Exists(_sevenZipPath))
             {
-                // UIスレッドでメッセージを表示
                 Dispatcher.Invoke(() => MessageBox.Show("7z.exe が見つかりません。"));
                 return;
             }
 
             try
             {
-                // 設定値を取得（UIスレッドから取得が必要な場合があるためInvoke）
                 string ext = "";
                 bool isUltra = true;
                 bool isThread = true;
@@ -252,7 +259,7 @@ namespace Zipper7
 
                 using (Process? p = Process.Start(psi))
                 {
-                    p?.WaitForExit(); // 個別圧縮の順序制御のために終了を待機
+                    p?.WaitForExit();
                 }
             }
             catch (Exception ex)
