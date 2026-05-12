@@ -42,7 +42,6 @@ namespace Zipper7
                         if (config.TryGetValue("Thread", out var t)) ChkThread.IsChecked = bool.Parse(t);
                         if (config.TryGetValue("Timestamp", out var ts)) ChkTimestamp.IsChecked = bool.Parse(ts);
 
-                        // 最前面設定の読み込み（デフォルトON）
                         bool isTopmost = true;
                         if (config.TryGetValue("Topmost", out var tm)) isTopmost = bool.Parse(tm);
                         ChkTopmost.IsChecked = isTopmost;
@@ -69,7 +68,6 @@ namespace Zipper7
                 }
                 else
                 {
-                    // デフォルト設定
                     ChkUltra.IsChecked = true;
                     ChkThread.IsChecked = true;
                     ChkTimestamp.IsChecked = true;
@@ -190,27 +188,119 @@ namespace Zipper7
                 if (paths != null && paths.Length > 0)
                 {
                     Point dropPoint = e.GetPosition(DropZone);
+                    bool isIndividual = paths.Length > 1 && dropPoint.X < DropZone.ActualWidth / 2;
 
-                    if (paths.Length > 1 && dropPoint.X < DropZone.ActualWidth / 2)
-                    {
-                        Task.Run(() => ExecuteParallel7Zip(paths));
-                    }
-                    else
-                    {
-                        Task.Run(() => Execute7Zip(paths));
-                    }
+                    Task.Run(() => ProcessItems(paths, isIndividual));
                 }
             }
         }
 
-        private void ExecuteParallel7Zip(string[] paths)
+        private void ProcessItems(string[] paths, bool isIndividual)
         {
-            var options = new ParallelOptions { MaxDegreeOfParallelism = 3 };
+            string[] archiveExtensions = { ".zip", ".7z", ".lzh", ".rar", ".tar", ".gz" };
 
-            Parallel.ForEach(paths, options, path =>
+            if (isIndividual)
             {
-                Execute7Zip(new string[] { path });
-            });
+                var options = new ParallelOptions { MaxDegreeOfParallelism = 3 };
+                Parallel.ForEach(paths, options, path =>
+                {
+                    string ext = Path.GetExtension(path).ToLower();
+                    if (archiveExtensions.Contains(ext))
+                        ExecuteExtract(path);
+                    else
+                        Execute7Zip(new string[] { path });
+                });
+            }
+            else
+            {
+                // 一括処理の場合、最初のファイルがアーカイブならアーカイブとして解凍を試みる
+                string firstExt = Path.GetExtension(paths[0]).ToLower();
+                if (archiveExtensions.Contains(firstExt))
+                {
+                    foreach (var path in paths) ExecuteExtract(path);
+                }
+                else
+                {
+                    Execute7Zip(paths);
+                }
+            }
+        }
+
+        private void ExecuteExtract(string archivePath)
+        {
+            if (!File.Exists(_sevenZipPath)) return;
+
+            try
+            {
+                string targetBaseDir = Path.GetDirectoryName(archivePath) ?? "";
+
+                // アーカイブ内のリストを確認して、ルートにディレクトリがあるか判定する
+                bool hasRootDirectory = CheckArchiveHasDirectory(archivePath);
+
+                string outputDir;
+                if (hasRootDirectory)
+                {
+                    // ディレクトリを含んでいるなら、その場所にそのまま展開
+                    outputDir = targetBaseDir;
+                }
+                else
+                {
+                    // 含んでいないなら、アーカイブ名（拡張子なし）のフォルダを作って展開
+                    outputDir = Path.Combine(targetBaseDir, Path.GetFileNameWithoutExtension(archivePath));
+                }
+
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = _sevenZipPath,
+                    // x: フォルダ構造維持して解凍, -o: 出力先, -y: 全てはい(上書き等)
+                    Arguments = $"x \"{archivePath}\" -o\"{outputDir}\" -y",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using (Process? p = Process.Start(psi))
+                {
+                    p?.WaitForExit();
+                    // ここで終了コードを確認し、容量不足等のエラーをキャッチすることも可能
+                    if (p?.ExitCode != 0)
+                    {
+                        Trace.WriteLine($"解凍エラー (ExitCode: {p?.ExitCode}): {archivePath}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"解凍例外: {ex.Message}");
+            }
+        }
+
+        // 7-Zipのリストコマンドを使用して、アーカイブがルートディレクトリを持っているか判定
+        private bool CheckArchiveHasDirectory(string archivePath)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = _sevenZipPath,
+                    Arguments = $"l \"{archivePath}\"", // リスト表示
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                };
+
+                using (Process? p = Process.Start(psi))
+                {
+                    string output = p?.StandardOutput.ReadToEnd() ?? "";
+                    p?.WaitForExit();
+
+                    // リスト出力からディレクトリ構造の有無を簡易判定
+                    // (出力行に 'D....' が含まれるか、複数のファイルがルートに散らばっているか等をチェック)
+                    // ここでは「ルートに単一のフォルダが存在するか」を厳密に判定するのは難しいため、
+                    // 多くのアーカイバの挙動に合わせ「フォルダフラグがあるか」で判定
+                    return output.Contains("D....");
+                }
+            }
+            catch { return false; }
         }
 
         private void Execute7Zip(string[] paths)
