@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 
 namespace Zipper7
@@ -20,6 +22,9 @@ namespace Zipper7
 
         private double _originalWidth = 150;
         private double _originalHeight = 150;
+
+        [DllImport("user32.dll")]
+        private static extern bool FlashWindow(IntPtr hwnd, bool bInvert);
 
         public MainWindow()
         {
@@ -190,7 +195,10 @@ namespace Zipper7
                     Point dropPoint = e.GetPosition(DropZone);
                     bool isIndividual = paths.Length > 1 && dropPoint.X < DropZone.ActualWidth / 2;
 
-                    Task.Run(() => ProcessItems(paths, isIndividual));
+                    Task.Run(() => {
+                        ProcessItems(paths, isIndividual);
+                        NotifyCompletion();
+                    });
                 }
             }
         }
@@ -213,7 +221,6 @@ namespace Zipper7
             }
             else
             {
-                // 一括処理の場合、最初のファイルがアーカイブならアーカイブとして解凍を試みる
                 string firstExt = Path.GetExtension(paths[0]).ToLower();
                 if (archiveExtensions.Contains(firstExt))
                 {
@@ -233,26 +240,13 @@ namespace Zipper7
             try
             {
                 string targetBaseDir = Path.GetDirectoryName(archivePath) ?? "";
-
-                // アーカイブ内のリストを確認して、ルートにディレクトリがあるか判定する
                 bool hasRootDirectory = CheckArchiveHasDirectory(archivePath);
 
-                string outputDir;
-                if (hasRootDirectory)
-                {
-                    // ディレクトリを含んでいるなら、その場所にそのまま展開
-                    outputDir = targetBaseDir;
-                }
-                else
-                {
-                    // 含んでいないなら、アーカイブ名（拡張子なし）のフォルダを作って展開
-                    outputDir = Path.Combine(targetBaseDir, Path.GetFileNameWithoutExtension(archivePath));
-                }
+                string outputDir = hasRootDirectory ? targetBaseDir : Path.Combine(targetBaseDir, Path.GetFileNameWithoutExtension(archivePath));
 
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = _sevenZipPath,
-                    // x: フォルダ構造維持して解凍, -o: 出力先, -y: 全てはい(上書き等)
                     Arguments = $"x \"{archivePath}\" -o\"{outputDir}\" -y",
                     UseShellExecute = false,
                     CreateNoWindow = true
@@ -261,11 +255,6 @@ namespace Zipper7
                 using (Process? p = Process.Start(psi))
                 {
                     p?.WaitForExit();
-                    // ここで終了コードを確認し、容量不足等のエラーをキャッチすることも可能
-                    if (p?.ExitCode != 0)
-                    {
-                        Trace.WriteLine($"解凍エラー (ExitCode: {p?.ExitCode}): {archivePath}");
-                    }
                 }
             }
             catch (Exception ex)
@@ -274,7 +263,6 @@ namespace Zipper7
             }
         }
 
-        // 7-Zipのリストコマンドを使用して、アーカイブがルートディレクトリを持っているか判定
         private bool CheckArchiveHasDirectory(string archivePath)
         {
             try
@@ -282,7 +270,7 @@ namespace Zipper7
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = _sevenZipPath,
-                    Arguments = $"l \"{archivePath}\"", // リスト表示
+                    Arguments = $"l \"{archivePath}\"",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     CreateNoWindow = true
@@ -292,11 +280,6 @@ namespace Zipper7
                 {
                     string output = p?.StandardOutput.ReadToEnd() ?? "";
                     p?.WaitForExit();
-
-                    // リスト出力からディレクトリ構造の有無を簡易判定
-                    // (出力行に 'D....' が含まれるか、複数のファイルがルートに散らばっているか等をチェック)
-                    // ここでは「ルートに単一のフォルダが存在するか」を厳密に判定するのは難しいため、
-                    // 多くのアーカイバの挙動に合わせ「フォルダフラグがあるか」で判定
                     return output.Contains("D....");
                 }
             }
@@ -305,11 +288,7 @@ namespace Zipper7
 
         private void Execute7Zip(string[] paths)
         {
-            if (!File.Exists(_sevenZipPath))
-            {
-                Dispatcher.Invoke(() => MessageBox.Show("7z.exe が見つかりません。"));
-                return;
-            }
+            if (!File.Exists(_sevenZipPath)) return;
 
             try
             {
@@ -355,6 +334,45 @@ namespace Zipper7
             catch (Exception ex)
             {
                 Trace.WriteLine($"圧縮エラー: {ex.Message}");
+            }
+        }
+
+        private void NotifyCompletion()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var helper = new WindowInteropHelper(this);
+                FlashWindow(helper.Handle, true);
+
+                // メッセージボックスを廃止し、トースト通知を実行
+                ShowToast("7zipper", "処理が完了しました。");
+            });
+        }
+
+        // PowerShellを使用してトースト通知を発行
+        private void ShowToast(string title, string message)
+        {
+            try
+            {
+                string script = $"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null;" +
+                                $"$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);" +
+                                $"$xml.GetElementsByTagName('text').Item(0).AppendChild($xml.CreateTextNode('{title}')) | Out-Null;" +
+                                $"$xml.GetElementsByTagName('text').Item(1).AppendChild($xml.CreateTextNode('{message}')) | Out-Null;" +
+                                $"$toast = [Windows.UI.Notifications.ToastNotification]::new($xml);" +
+                                $"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('7zipper').Show($toast);";
+
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"Toast Error: {ex.Message}");
             }
         }
     }
