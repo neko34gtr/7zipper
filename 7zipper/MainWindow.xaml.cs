@@ -124,10 +124,8 @@ namespace Zipper7
         {
             _originalWidth = this.Width;
             _originalHeight = this.Height;
-
             this.Width = 250;
             this.Height = 300;
-
             DropZone.Visibility = Visibility.Collapsed;
             ConfigPanel.Visibility = Visibility.Visible;
         }
@@ -136,10 +134,8 @@ namespace Zipper7
         {
             this.Width = _originalWidth;
             this.Height = _originalHeight;
-
             ConfigPanel.Visibility = Visibility.Collapsed;
             DropZone.Visibility = Visibility.Visible;
-
             SaveConfig();
         }
 
@@ -240,9 +236,13 @@ namespace Zipper7
             try
             {
                 string targetBaseDir = Path.GetDirectoryName(archivePath) ?? "";
-                bool hasRootDirectory = CheckArchiveHasDirectory(archivePath);
 
-                string outputDir = hasRootDirectory ? targetBaseDir : Path.Combine(targetBaseDir, Path.GetFileNameWithoutExtension(archivePath));
+                // ルートに単一のフォルダのみが存在するかを厳密にチェック
+                bool shouldExtractDirectly = CheckIfArchiveHasSingleRootFolder(archivePath);
+
+                string outputDir = shouldExtractDirectly
+                    ? targetBaseDir
+                    : Path.Combine(targetBaseDir, Path.GetFileNameWithoutExtension(archivePath));
 
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
@@ -263,14 +263,14 @@ namespace Zipper7
             }
         }
 
-        private bool CheckArchiveHasDirectory(string archivePath)
+        private bool CheckIfArchiveHasSingleRootFolder(string archivePath)
         {
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = _sevenZipPath,
-                    Arguments = $"l \"{archivePath}\"",
+                    Arguments = $"l \"{archivePath}\" -slt", // 技術詳細を表示するモード
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     CreateNoWindow = true
@@ -280,7 +280,37 @@ namespace Zipper7
                 {
                     string output = p?.StandardOutput.ReadToEnd() ?? "";
                     p?.WaitForExit();
-                    return output.Contains("D....");
+
+                    // ルート直下（パスに'\'が含まれない）のパスを抽出
+                    var lines = output.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+                    var rootItems = new HashSet<string>();
+                    var folderItems = new HashSet<string>();
+
+                    string currentPath = "";
+                    bool currentIsFolder = false;
+
+                    foreach (var line in lines)
+                    {
+                        if (line.StartsWith("Path = ")) currentPath = line.Substring(7);
+                        if (line.StartsWith("Attributes = ")) currentIsFolder = line.Contains("D");
+
+                        // 7-Zipのリスト出力がブロック（アイテムごと）で終わるタイミングで判定
+                        if (string.IsNullOrWhiteSpace(line) || line.StartsWith("----------")) continue;
+
+                        if (!string.IsNullOrEmpty(currentPath))
+                        {
+                            // ルート階層の判定（パス区切り文字が含まれない、または末尾のみ）
+                            string cleanPath = currentPath.TrimEnd('\\');
+                            if (!cleanPath.Contains("\\"))
+                            {
+                                rootItems.Add(cleanPath);
+                                if (currentIsFolder) folderItems.Add(cleanPath);
+                            }
+                        }
+                    }
+
+                    // ルートにアイテムが1つだけで、かつそれがフォルダである場合のみ true
+                    return rootItems.Count == 1 && folderItems.Count == 1;
                 }
             }
             catch { return false; }
@@ -343,13 +373,10 @@ namespace Zipper7
             {
                 var helper = new WindowInteropHelper(this);
                 FlashWindow(helper.Handle, true);
-
-                // メッセージボックスを廃止し、トースト通知を実行
                 ShowToast("7zipper", "処理が完了しました。");
             });
         }
 
-        // PowerShellを使用してトースト通知を発行
         private void ShowToast(string title, string message)
         {
             try
