@@ -421,7 +421,6 @@ namespace Zipper7
                 string ext = "";
                 bool isUltra = true;
                 bool isThread = true;
-                bool isTimestamp = true;
 
                 // UI要素からの設定取得はDispatcher経由で行う
                 Dispatcher.Invoke(() =>
@@ -429,7 +428,7 @@ namespace Zipper7
                     ext = ((ComboBoxItem)ComboExt.SelectedItem).Content?.ToString() ?? ".zip";
                     isUltra = ChkUltra.IsChecked == true;
                     isThread = ChkThread.IsChecked == true;
-                    isTimestamp = ChkTimestamp.IsChecked == true;
+                    // ChkTimestampはアーカイブ内部のファイルの日時維持用として解釈し、アーカイブ自体の更新日時は作成時(現在)とするためここでは見ない
                 });
 
                 string targetDir = Path.GetDirectoryName(paths[0]) ?? "";
@@ -444,7 +443,7 @@ namespace Zipper7
                 if (ext == ".zip") args.Add("-tzip");
                 if (isUltra) args.Add("-mx=9");
                 if (isThread) args.Add("-mmt=on");
-                if (isTimestamp) args.Add("-stl");
+                // -stl (アーカイブの更新日時を最新ファイルに合わせる) は意図的に指定しない
                 args.Add("-y");
 
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -458,6 +457,13 @@ namespace Zipper7
                 using (Process? p = Process.Start(psi))
                 {
                     p?.WaitForExit();
+                }
+
+                // 圧縮完了後、アーカイブファイル自体の更新日時を確実に「現在」にする
+                // 7-Zipのデフォルト挙動で現在時刻になるが、念のため.NET側で上書き
+                if (File.Exists(outputArchive))
+                {
+                    File.SetLastWriteTime(outputArchive, DateTime.Now);
                 }
             }
             catch (Exception ex)
