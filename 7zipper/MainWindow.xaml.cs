@@ -467,13 +467,23 @@ namespace Zipper7
         }
 
         /// <summary>
-        /// 複数ファイル名の中から、区切り文字に基づいた出現頻度の高いワードを探し、
-        /// アーカイブ名のベースとして採用するファジーな命名ロジック
+        /// 複数ファイル名の中から、アーカイブ名のベースを決定するロジック。
+        /// 1. 実行ファイル(.exe)があれば最優先。
+        /// 2. なければ区切り文字に基づいた出現頻度の高いワードを抽出。
         /// </summary>
         private string DetermineArchiveName(string[] paths)
         {
             // 単体ドロップならそのままの名前
             if (paths.Length == 1) return Path.GetFileNameWithoutExtension(paths[0]);
+
+            // 【追加ロジック】実行ファイル(.exe)が含まれているかスキャン
+            string? firstExeName = paths
+                .Where(p => Path.GetExtension(p).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+                .Select(p => Path.GetFileNameWithoutExtension(p))
+                .FirstOrDefault();
+
+            // .exeが見つかれば、それを確定名称として即座に返す
+            if (!string.IsNullOrEmpty(firstExeName)) return firstExeName;
 
             var wordFrequencies = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             // 一般的に使用される区切り文字

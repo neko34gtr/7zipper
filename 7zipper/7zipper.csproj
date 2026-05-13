@@ -8,6 +8,8 @@
 		<AssemblyName>7zipper</AssemblyName>
 		<RootNamespace>Zipper7</RootNamespace>
 		<ApplicationIcon>7zipper.ico</ApplicationIcon>
+		<FileVersion>1.1.0</FileVersion>
+		<AssemblyVersion>1.1.0</AssemblyVersion>
 	</PropertyGroup>
 	<ItemGroup>
 	  <Content Include="7zipper.ico" />
