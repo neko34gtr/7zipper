@@ -78,6 +78,10 @@ namespace Zipper7
                         ChkTopmost.IsChecked = isTopmost;
                         this.Topmost = isTopmost;
 
+                        // 辞書サイズ・ワードサイズ設定の復元
+                        if (config.TryGetValue("DictIdx", out var di) && int.TryParse(di, out int dIdx)) ComboDict.SelectedIndex = dIdx;
+                        if (config.TryGetValue("WordIdx", out var wi) && int.TryParse(wi, out int wIdx)) ComboWord.SelectedIndex = wIdx;
+
                         // 拡張子選択の復元
                         if (config.TryGetValue("Ext", out var e))
                         {
@@ -103,11 +107,13 @@ namespace Zipper7
                 else
                 {
                     // 初回起動時のデフォルト設定
-                    ChkUltra.IsChecked = true;
+                    ChkUltra.IsChecked = false; // デフォルトは標準(Normal)
                     ChkThread.IsChecked = true;
                     ChkTimestamp.IsChecked = true;
                     ChkTopmost.IsChecked = true;
                     this.Topmost = true;
+                    ComboDict.SelectedIndex = 1; // 32MB
+                    ComboWord.SelectedIndex = 1; // 64
                     ComboExt.SelectedIndex = 0;
                     SaveConfig();
                 }
@@ -127,10 +133,12 @@ namespace Zipper7
             {
                 var config = new Dictionary<string, string>
                 {
-                    { "Ultra", ChkUltra.IsChecked?.ToString() ?? "True" },
+                    { "Ultra", ChkUltra.IsChecked?.ToString() ?? "False" },
                     { "Thread", ChkThread.IsChecked?.ToString() ?? "True" },
                     { "Timestamp", ChkTimestamp.IsChecked?.ToString() ?? "True" },
                     { "Topmost", ChkTopmost.IsChecked?.ToString() ?? "True" },
+                    { "DictIdx", ComboDict.SelectedIndex.ToString() },
+                    { "WordIdx", ComboWord.SelectedIndex.ToString() },
                     { "Ext", ((ComboBoxItem)ComboExt.SelectedItem).Content?.ToString() ?? ".zip" },
                     { "WindowTop", this.Top.ToString() },
                     { "WindowLeft", this.Left.ToString() }
@@ -169,8 +177,8 @@ namespace Zipper7
             _originalHeight = this.Height;
 
             // パネル表示用にウィンドウサイズを拡張
-            this.Width = 250;
-            this.Height = 300;
+            this.Width = 260;
+            this.Height = 350;
             DropZone.Visibility = Visibility.Collapsed;
             ConfigPanel.Visibility = Visibility.Visible;
         }
@@ -290,8 +298,8 @@ namespace Zipper7
 
             if (isIndividual)
             {
-                // 最大3並列で個別処理を実行
-                var options = new ParallelOptions { MaxDegreeOfParallelism = 3 };
+                // 最大2並列で個別処理を実行（モバイル環境負荷を考慮）
+                var options = new ParallelOptions { MaxDegreeOfParallelism = 2 };
                 Parallel.ForEach(paths, options, path =>
                 {
                     string ext = Path.GetExtension(path).ToLower();
@@ -419,17 +427,34 @@ namespace Zipper7
             try
             {
                 string ext = "";
-                bool isUltra = true;
+                bool isUltra = false;
                 bool isThread = true;
+                string dictSize = "32m";
+                string wordSize = "64";
 
                 // UI要素からの設定取得はDispatcher経由で行う
                 Dispatcher.Invoke(() =>
                 {
-                    ext = ((ComboBoxItem)ComboExt.SelectedItem).Content?.ToString() ?? ".zip";
+                    // ComboExt.SelectedItem が null でないか確認し、安全に文字列を取得
+                    if (ComboExt.SelectedItem is ComboBoxItem extItem)
+                    {
+                        ext = extItem.Content?.ToString() ?? ".zip";
+                    }
                     isUltra = ChkUltra.IsChecked == true;
                     isThread = ChkThread.IsChecked == true;
-                    // ChkTimestampはアーカイブ内部のファイルの日時維持用として解釈し、アーカイブ自体の更新日時は作成時(現在)とするためここでは見ない
+
+                    // ComboDict / ComboWord の SelectedItem を安全にキャストして取得
+                    if (ComboDict.SelectedItem is ComboBoxItem dictItem)
+                    {
+                        dictSize = dictItem.Content?.ToString()?.Replace(" MB", "m").ToLower() ?? "32m";
+                    }
+
+                    if (ComboWord.SelectedItem is ComboBoxItem wordItem)
+                    {
+                        wordSize = wordItem.Content?.ToString() ?? "64";
+                    }
                 });
+
 
                 string targetDir = Path.GetDirectoryName(paths[0]) ?? "";
 
@@ -441,9 +466,22 @@ namespace Zipper7
                 args.AddRange(paths.Select(p => $"\"{p}\""));
 
                 if (ext == ".zip") args.Add("-tzip");
-                if (isUltra) args.Add("-mx=9");
+
+                // 圧縮レベルと詳細パラメータの適用
+                if (isUltra)
+                {
+                    // 最高圧縮 (Ultra) + ユーザー指定パラメータ
+                    args.Add("-mx=9");
+                    args.Add($"-md={dictSize}");
+                    args.Add($"-mfb={wordSize}");
+                }
+                else
+                {
+                    // 標準圧縮 (Normal / 本家 -mx5 相当)
+                    args.Add("-mx=5");
+                }
+
                 if (isThread) args.Add("-mmt=on");
-                // -stl (アーカイブの更新日時を最新ファイルに合わせる) は意図的に指定しない
                 args.Add("-y");
 
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -451,16 +489,26 @@ namespace Zipper7
                     FileName = _sevenZipPath,
                     Arguments = string.Join(" ", args),
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    WorkingDirectory = targetDir
                 };
 
                 using (Process? p = Process.Start(psi))
                 {
-                    p?.WaitForExit();
+                    if (p != null)
+                    {
+                        try
+                        {
+                            // モバイルCPUでも演算リソースを優先確保できるよう「通常以上」に設定
+                            p.PriorityClass = ProcessPriorityClass.AboveNormal;
+                        }
+                        catch { }
+
+                        p.WaitForExit();
+                    }
                 }
 
-                // 圧縮完了後、アーカイブファイル自体の更新日時を確実に「現在」にする
-                // 7-Zipのデフォルト挙動で現在時刻になるが、念のため.NET側で上書き
+                // 圧縮完了後、アーカイブファイル自体の更新日時を現在時刻に設定
                 if (File.Exists(outputArchive))
                 {
                     File.SetLastWriteTime(outputArchive, DateTime.Now);
@@ -479,20 +527,17 @@ namespace Zipper7
         /// </summary>
         private string DetermineArchiveName(string[] paths)
         {
-            // 単体ドロップならそのままの名前
             if (paths.Length == 1) return Path.GetFileNameWithoutExtension(paths[0]);
 
-            // 【追加ロジック】実行ファイル(.exe)が含まれているかスキャン
+            // 実行ファイル(.exe)が含まれているかスキャン
             string? firstExeName = paths
                 .Where(p => Path.GetExtension(p).Equals(".exe", StringComparison.OrdinalIgnoreCase))
                 .Select(p => Path.GetFileNameWithoutExtension(p))
                 .FirstOrDefault();
 
-            // .exeが見つかれば、それを確定名称として即座に返す
             if (!string.IsNullOrEmpty(firstExeName)) return firstExeName;
 
             var wordFrequencies = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            // 一般的に使用される区切り文字
             char[] delimiters = { '.', '-', '_', ' ' };
 
             foreach (var path in paths)
@@ -507,13 +552,11 @@ namespace Zipper7
                 }
             }
 
-            // 最も出現頻度が高く、かつ長い単語を優先的に選出
             var mostFrequentWord = wordFrequencies
                 .OrderByDescending(x => x.Value)
                 .ThenByDescending(x => x.Key.Length)
                 .FirstOrDefault();
 
-            // 共通項（頻度2以上）があれば採用。なければ最初のファイル名を採用
             if (mostFrequentWord.Value > 1) return mostFrequentWord.Key;
 
             return Path.GetFileNameWithoutExtension(paths[0]);
