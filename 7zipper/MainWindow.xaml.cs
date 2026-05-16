@@ -356,6 +356,9 @@ namespace Zipper7
                 {
                     p?.WaitForExit();
                 }
+
+                // 【追加機能】解凍完了後、展開先のフォルダを開く
+                Process.Start("explorer.exe", $"\"{outputDir}\"");
             }
             catch (Exception ex)
             {
@@ -435,26 +438,24 @@ namespace Zipper7
                 // UI要素からの設定取得はDispatcher経由で行う
                 Dispatcher.Invoke(() =>
                 {
-                    // ComboExt.SelectedItem が null でないか確認し、安全に文字列を取得
                     if (ComboExt.SelectedItem is ComboBoxItem extItem)
                     {
                         ext = extItem.Content?.ToString() ?? ".zip";
                     }
+
                     isUltra = ChkUltra.IsChecked == true;
                     isThread = ChkThread.IsChecked == true;
 
-                    // ComboDict / ComboWord の SelectedItem を安全にキャストして取得
+                    // ComboBoxからの辞書サイズ・ワードサイズ取得
                     if (ComboDict.SelectedItem is ComboBoxItem dictItem)
                     {
                         dictSize = dictItem.Content?.ToString()?.Replace(" MB", "m").ToLower() ?? "32m";
                     }
-
                     if (ComboWord.SelectedItem is ComboBoxItem wordItem)
                     {
                         wordSize = wordItem.Content?.ToString() ?? "64";
                     }
                 });
-
 
                 string targetDir = Path.GetDirectoryName(paths[0]) ?? "";
 
@@ -512,6 +513,9 @@ namespace Zipper7
                 if (File.Exists(outputArchive))
                 {
                     File.SetLastWriteTime(outputArchive, DateTime.Now);
+
+                    // 【追加機能】圧縮完了後、作成されたアーカイブを選択した状態でエクスプローラーを開く
+                    Process.Start("explorer.exe", $"/select,\"{outputArchive}\"");
                 }
             }
             catch (Exception ex)
@@ -570,6 +574,7 @@ namespace Zipper7
             Dispatcher.Invoke(() =>
             {
                 var helper = new WindowInteropHelper(this);
+                // OSの標準的な動作として、非アクティブ時にタスクバーアイコンを点滅させる
                 FlashWindow(helper.Handle, true);
                 ShowToast("7zipper", "処理が完了しました。");
             });
